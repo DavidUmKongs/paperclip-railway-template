@@ -128,9 +128,11 @@ function serveSetupPage() {
       markSetupComplete();
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, message: "Launching Paperclip..." }));
-      server.close(() => {
-        launchPaperclip();
-      });
+      setTimeout(() => {           // ← wrap in setTimeout
+        server.close(() => {
+          launchPaperclip();
+        });
+      }, 500);                     // ← 500ms delay
       return;
     }
 
@@ -168,8 +170,8 @@ function launchPaperclip() {
       $meta: {
         version: 1,
         createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),   // ← add this
-        source: "onboard",                      // ← change from "railway-wrapper" to "onboard"
+        updatedAt: new Date().toISOString(),
+        source: "onboard",
       },
       database: {
         provider: "postgres",
