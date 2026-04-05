@@ -143,6 +143,19 @@
     .btn-danger    { background: #450a0a; color: #fca5a5; border: 1px solid var(--error); }
 
     .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 20px; }
+    .form-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+    .stack { display: flex; flex-direction: column; gap: 14px; }
+    .text-input {
+      flex: 1; min-width: 260px;
+      background: var(--bg); border: 1px solid var(--border);
+      color: var(--text); padding: 10px 12px;
+      border-radius: 8px; font-size: 14px;
+    }
+    .text-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
 
     /* ── Invite box ── */
     .invite-box {
@@ -234,6 +247,21 @@
     ══════════════════════════════════════════════ -->
     <div class="tab-panel active" id="panel-setup">
 
+      <div class="section-label">Setup access</div>
+
+      <div class="dashboard-box" id="setup-auth-box">
+        <h3>🔐 Protect setup actions</h3>
+        <p id="setup-auth-copy">Loading...</p>
+        <div class="form-row" id="setup-auth-form" style="display:none">
+          <input class="text-input" id="setup-password-input" type="password" autocomplete="current-password" placeholder="Enter PAPERCLIP_SETUP_PASSWORD" />
+          <button class="btn btn-secondary" id="setup-unlock-btn" onclick="loginSetup(this)">Unlock setup</button>
+        </div>
+        <div class="actions" id="setup-auth-actions" style="display:none">
+          <button class="btn btn-ghost" id="setup-lock-btn" onclick="logoutSetup(this)">🔒 Lock setup</button>
+        </div>
+      </div>
+
+      <hr class="divider" />
       <div class="section-label">Environment variables</div>
 
       <div id="setup-banner" class="banner info">
@@ -251,6 +279,57 @@
       <div id="setup-hint" class="banner info" style="display:none; margin-top:16px;">
         💡 If any variables are missing, add them in Railway → <strong>Variables</strong> tab, then click <strong>Refresh</strong>.
       </div>
+      <hr class="divider" />
+
+      <div class="section-label">Codex Plan (ChatGPT OAuth)</div>
+
+      <div class="dashboard-box" id="codex-box">
+        <h3>🤖 Connect Codex with your ChatGPT plan</h3>
+        <p id="codex-description">Loading...</p>
+
+        <div id="codex-status" class="banner info">
+          <span class="spinner"></span>
+          <span>Checking Codex status...</span>
+        </div>
+
+        <div id="codex-code-box" class="invite-box" style="display:none">
+          <h3>Open the verification URL and enter the one-time code</h3>
+          <div class="stack">
+            <div>
+              <div class="section-label" style="margin-bottom:8px;">Verification URL</div>
+              <div class="url-row">
+                <input class="url-input" id="codex-verification-url" readonly placeholder="Waiting for URL..." />
+                <button class="btn btn-secondary" onclick="copyInputValue('codex-verification-url', this)">📋 Copy</button>
+              </div>
+            </div>
+
+            <div>
+              <div class="section-label" style="margin-bottom:8px;">One-time code</div>
+              <div class="url-row">
+                <input class="url-input" id="codex-user-code" readonly placeholder="Waiting for code..." />
+                <button class="btn btn-secondary" onclick="copyInputValue('codex-user-code', this)">📋 Copy</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="invite-actions">
+            <a id="codex-open-link" href="#" target="_blank">
+              <button class="btn btn-primary">🌐 Open verification URL</button>
+            </a>
+          </div>
+
+          <div class="invite-note">
+            This runs <code>codex login --device-auth</code> inside the Railway service and stores the resulting ChatGPT session under <code>/paperclip/.codex</code>.
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary" id="codex-start-btn" onclick="startCodexLogin(this)">🔐 Start Codex Plan login</button>
+          <button class="btn btn-secondary" id="codex-cancel-btn" style="display:none" onclick="cancelCodexLogin(this)">✖ Cancel login</button>
+          <button class="btn btn-ghost" id="codex-logout-btn" style="display:none" onclick="logoutCodex(this)">🚪 Remove saved Codex login</button>
+          <button class="btn btn-secondary" onclick="loadCodexStatus()">🔄 Refresh Codex status</button>
+        </div>
+      </div>
 
     </div>
 
@@ -261,6 +340,9 @@
 
       <!-- Invite section -->
       <div class="section-label">Admin registration</div>
+      <div id="manage-locked" class="banner warn" style="display:none">
+        🔒 Unlock setup from the Setup tab to view invite links, rotate them, reset the instance, or manage Codex access.
+      </div>
 
       <div id="invite-waiting" class="banner info" style="display:none">
         <span class="spinner"></span>
@@ -338,6 +420,13 @@
   let pcReady    = false;
   let inviteUrl  = null;
   let invitePoll = null;
+  let codexPoll  = null;
+  let lastVars   = [];
+  let setupAuth  = {
+    passwordConfigured: false,
+    required: false,
+    authenticated: false,
+  };
 
   // ── Tabs ───────────────────────────────────────────────────────────────────
 
@@ -351,6 +440,10 @@
   }
 
   function goToManage() {
+    if (setupAuth.required && !setupAuth.authenticated) {
+      document.getElementById('setup-password-input').focus();
+      return;
+    }
     // Auto-launch if not already running, then switch to manage tab
     if (!pcReady) {
       launchAndSwitchToManage();
@@ -358,16 +451,51 @@
       showTab('manage');
     }
   }
+  async function apiJson(url, options = {}) {
+    const headers = { ...(options.headers || {}) };
+    if (options.body && !headers['Content-Type']) {
+      headers['Content-Type'] = 'application/json';
+    }
+
+    const res = await fetch(url, { ...options, headers });
+    const text = await res.text();
+    let data = {};
+
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch (_) {
+      data = { raw: text };
+    }
+
+    if (!res.ok) {
+      const error = new Error(data.error || `Request failed (${res.status})`);
+      error.status = res.status;
+      error.payload = data;
+      throw error;
+    }
+
+    return data;
+  }
+
+  async function normalizeApiError(error) {
+    if (error && (error.status === 401 || error.status === 428)) {
+      await loadStatus();
+      await loadCodexStatus();
+    }
+    return error?.message || 'Request failed.';
+  }
 
   // ── Status polling ─────────────────────────────────────────────────────────
 
   async function loadStatus() {
     try {
-      const res  = await fetch('/setup/status');
-      const data = await res.json();
+      const data = await apiJson('/setup/status');
       appReady = data.ready;
       pcReady  = data.paperclipReady;
-      renderVars(data.vars);
+      lastVars = data.vars;
+      setupAuth = data.setupAuth || setupAuth;
+      renderSetupAuth();
+      renderVars(lastVars);
       updateSetupBanner(data.vars, data.ready);
       updateHeader(data.ready, data.paperclipReady);
     } catch(e) {
@@ -381,6 +509,29 @@
     if (!ready)   sub.textContent = 'Ensure all required environment variables are set.';
     else if (!pcReady) sub.textContent = 'Paperclip is starting up...';
     else          sub.textContent = 'Paperclip is running.';
+  }
+  function renderSetupAuth() {
+    const copy = document.getElementById('setup-auth-copy');
+    const form = document.getElementById('setup-auth-form');
+    const actions = document.getElementById('setup-auth-actions');
+
+    if (!setupAuth.passwordConfigured) {
+      copy.innerHTML = 'Setup is currently public because <code>PAPERCLIP_SETUP_PASSWORD</code> is not set. Add it in Railway Variables before using Codex Plan login so the verification URL and one-time code are not exposed.';
+      form.style.display = 'none';
+      actions.style.display = 'none';
+      return;
+    }
+
+    if (!setupAuth.authenticated) {
+      copy.innerHTML = 'Setup is locked. Enter <code>PAPERCLIP_SETUP_PASSWORD</code> to launch Paperclip, view invite links, reset setup, and start Codex Plan login.';
+      form.style.display = 'flex';
+      actions.style.display = 'none';
+      return;
+    }
+
+    copy.innerHTML = 'Setup is unlocked for this browser session.';
+    form.style.display = 'none';
+    actions.style.display = 'flex';
   }
 
   function renderVars(vars) {
@@ -402,19 +553,24 @@
     const banner  = document.getElementById('setup-banner');
     const hint    = document.getElementById('setup-hint');
     const missing = vars.filter(v => v.missing);
+    const locked  = setupAuth.required && !setupAuth.authenticated;
 
     if (appReady && pcReady) {
-      // Already launched
-      banner.className = 'banner success';
-      banner.textContent = '✅ Paperclip is running. Switch to the Manage tab.';
-      btn.disabled = false;
-      btn.textContent = '▶️ Go to Manage';
+      banner.className = locked ? 'banner info' : 'banner success';
+      banner.textContent = locked
+        ? '✅ Paperclip is running. Unlock setup to access the Manage tab.'
+        : '✅ Paperclip is running. Switch to the Manage tab.';
+      btn.disabled = locked;
+      btn.textContent = locked ? '🔒 Unlock setup first' : '▶️ Go to Manage';
       hint.style.display = 'none';
       note.style.display = 'none';
     } else if (missing.length === 0) {
-      banner.className = 'banner success';
-      banner.textContent = '✅ All required variables are set. Click "Go to Manage" to launch Paperclip.';
-      btn.disabled = false;
+      banner.className = locked ? 'banner info' : 'banner success';
+      banner.textContent = locked
+        ? '✅ All required variables are set. Unlock setup to launch Paperclip.'
+        : '✅ All required variables are set. Click "Go to Manage" to launch Paperclip.';
+      btn.disabled = locked;
+      btn.textContent = locked ? '🔒 Unlock setup first' : '▶️ Go to Manage';
       hint.style.display = 'none';
     } else {
       banner.className = 'banner warn';
@@ -432,13 +588,17 @@
     btn.textContent = '⏳ Launching...';
 
     try {
-      const res  = await fetch('/setup/launch', { method: 'POST' });
-      const data = await res.json();
+      const data = await apiJson('/setup/launch', { method: 'POST' });
       if (data.already) {
         showTab('manage');
         return;
       }
-    } catch(_) {}
+    } catch(error) {
+      btn.disabled = false;
+      btn.textContent = '▶️ Go to Manage';
+      alert(await normalizeApiError(error));
+      return;
+    }
 
     // Poll status until paperclip is ready, then switch to manage tab
     const interval = setInterval(async () => {
@@ -456,11 +616,26 @@
 
   async function refreshManage() {
     await loadStatus();
+    const manageLocked = document.getElementById('manage-locked');
 
     // Auto-launch if env vars are set but Paperclip isn't running yet
+    if (setupAuth.required && !setupAuth.authenticated) {
+      manageLocked.style.display = 'block';
+      document.getElementById('invite-waiting').style.display = 'none';
+      document.getElementById('invite-not-launched').style.display = 'none';
+      document.getElementById('invite-box').style.display = 'none';
+      document.getElementById('admin-exists-box').style.display = 'none';
+      const statusDiv = document.getElementById('manage-status');
+      statusDiv.className = 'banner warn';
+      statusDiv.textContent = '🔒 Unlock setup from the Setup tab to continue.';
+      return;
+    }
+
+    manageLocked.style.display = 'none';
+
     if (allVarsSet() && !pcReady && !appReady) {
       try {
-        await fetch('/setup/launch', { method: 'POST' });
+        await apiJson('/setup/launch', { method: 'POST' });
       } catch(_) {}
     }
 
@@ -492,7 +667,7 @@
         adminExists.style.display = 'none';
 
         try {
-          await fetch('/setup/launch', { method: 'POST' });
+          await apiJson('/setup/launch', { method: 'POST' });
         } catch(_) {}
 
         startInvitePoll();
@@ -524,15 +699,12 @@
   }
 
   function allVarsSet() {
-    // Check from the last rendered vars
-    const badges = document.querySelectorAll('.var-badge.missing');
-    return badges.length === 0;
+    return lastVars.filter(v => v.missing).length === 0;
   }
 
   async function fetchInvite() {
     try {
-      const res  = await fetch('/setup/invite');
-      const data = await res.json();
+      const data = await apiJson('/setup/invite');
       if (data.url) { inviteUrl = data.url; return { url: data.url }; }
       if (data.skippedReason) return { skippedReason: data.skippedReason };
     } catch(_) {}
@@ -579,12 +751,25 @@
     document.getElementById('admin-exists-box').style.display = 'block';
     document.getElementById('admin-exists-msg').textContent   = reason;
   }
-
-  function copyInvite(btn) {
-    navigator.clipboard.writeText(document.getElementById('invite-url').value).then(() => {
+  function copyInputValue(inputId, btn) {
+    const value = document.getElementById(inputId).value;
+    navigator.clipboard.writeText(value).then(() => {
       btn.textContent = '✅ Copied!';
       setTimeout(() => btn.textContent = '📋 Copy', 2000);
+    }).catch(() => {
+      try {
+        const el = document.getElementById(inputId);
+        el.select();
+        document.execCommand('copy');
+        btn.textContent = '✅ Copied!';
+      } catch (_) {
+        btn.textContent = '❌ Copy failed';
+      }
+      setTimeout(() => btn.textContent = '📋 Copy', 2000);
     });
+  }
+  function copyInvite(btn) {
+    copyInputValue('invite-url', btn);
   }
 
   async function rotateInvite(btn) {
@@ -592,8 +777,7 @@
     const originalText = btn.textContent;
     btn.textContent = '⏳ Generating...';
     try {
-      const res  = await fetch('/setup/rotate-invite', { method: 'POST' });
-      const data = await res.json();
+      const data = await apiJson('/setup/rotate-invite', { method: 'POST' });
       if (data.url) {
         showInviteBox(data.url);
         document.getElementById('admin-exists-box').style.display = 'none';
@@ -601,32 +785,265 @@
         alert('Rotation completed but no URL returned. Check Railway logs.');
       }
     } catch(e) {
-      alert('Failed to rotate invite. Check Railway logs.');
+      alert(await normalizeApiError(e));
     } finally {
       btn.disabled = false;
       btn.textContent = originalText;
     }
   }
 
+  // ── Setup auth ─────────────────────────────────────────────────────────────
+
+  async function loginSetup(btn) {
+    const input = document.getElementById('setup-password-input');
+    const password = input.value;
+    if (!password) {
+      input.focus();
+      return;
+    }
+
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = '⏳ Unlocking...';
+
+    try {
+      await apiJson('/setup/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      });
+      input.value = '';
+      await loadStatus();
+      await loadCodexStatus();
+      if (document.getElementById('panel-manage').classList.contains('active')) {
+        await refreshManage();
+      }
+    } catch (error) {
+      alert(await normalizeApiError(error));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+
+  async function logoutSetup(btn) {
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = '⏳ Locking...';
+
+    try {
+      await apiJson('/setup/auth/logout', { method: 'POST' });
+      stopInvitePoll();
+      stopCodexPoll();
+      await loadStatus();
+      await loadCodexStatus();
+      if (document.getElementById('panel-manage').classList.contains('active')) {
+        await refreshManage();
+      }
+    } catch (error) {
+      alert(await normalizeApiError(error));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+
+  // ── Codex Plan login ───────────────────────────────────────────────────────
+
+  function stopCodexPoll() {
+    if (codexPoll) {
+      clearInterval(codexPoll);
+      codexPoll = null;
+    }
+  }
+
+  function startCodexPoll() {
+    if (codexPoll) return;
+    codexPoll = setInterval(async () => {
+      await loadCodexStatus();
+    }, 2500);
+  }
+
+  function renderCodexState(data) {
+    const description = document.getElementById('codex-description');
+    const banner = document.getElementById('codex-status');
+    const codeBox = document.getElementById('codex-code-box');
+    const startBtn = document.getElementById('codex-start-btn');
+    const cancelBtn = document.getElementById('codex-cancel-btn');
+    const logoutBtn = document.getElementById('codex-logout-btn');
+    const urlInput = document.getElementById('codex-verification-url');
+    const codeInput = document.getElementById('codex-user-code');
+    const openLink = document.getElementById('codex-open-link');
+
+    if (!setupAuth.passwordConfigured) {
+      description.innerHTML = 'To use your ChatGPT/Codex Plan instead of an API key, add <code>PAPERCLIP_SETUP_PASSWORD</code> first. That protects the verification URL and one-time code.';
+      banner.className = 'banner warn';
+      banner.textContent = '⚠️ Codex Plan login is disabled until PAPERCLIP_SETUP_PASSWORD is set.';
+      codeBox.style.display = 'none';
+      startBtn.style.display = 'inline-flex';
+      startBtn.disabled = true;
+      cancelBtn.style.display = 'none';
+      logoutBtn.style.display = 'none';
+      stopCodexPoll();
+      return;
+    }
+
+    if (setupAuth.required && !setupAuth.authenticated) {
+      description.innerHTML = 'Unlock setup first, then start device-code login for your ChatGPT/Codex Plan. No OpenAI API key is required for this path.';
+      banner.className = 'banner info';
+      banner.textContent = '🔒 Unlock setup to manage Codex Plan login.';
+      codeBox.style.display = 'none';
+      startBtn.style.display = 'inline-flex';
+      startBtn.disabled = true;
+      cancelBtn.style.display = 'none';
+      logoutBtn.style.display = 'none';
+      stopCodexPoll();
+      return;
+    }
+
+    description.innerHTML = 'Use your ChatGPT/Codex Plan via OAuth. This avoids separate OpenAI API billing unless you deliberately set <code>OPENAI_API_KEY</code> as a fallback.';
+    startBtn.disabled = false;
+
+    if (data.phase === 'authenticated') {
+      banner.className = 'banner success';
+      banner.textContent = data.message || '✅ Codex is connected using ChatGPT OAuth.';
+      codeBox.style.display = 'none';
+      startBtn.style.display = 'none';
+      cancelBtn.style.display = 'none';
+      logoutBtn.style.display = 'inline-flex';
+      stopCodexPoll();
+      return;
+    }
+
+    if (data.phase === 'starting' || data.phase === 'pending') {
+      banner.className = 'banner info';
+      banner.innerHTML = `<span class="spinner"></span><span>${data.message || 'Waiting for device-code login...'}</span>`;
+      codeBox.style.display = (data.verificationUrl || data.userCode) ? 'block' : 'none';
+      urlInput.value = data.verificationUrl || '';
+      codeInput.value = data.userCode || '';
+      openLink.href = data.verificationUrl || '#';
+      startBtn.style.display = 'none';
+      cancelBtn.style.display = 'inline-flex';
+      logoutBtn.style.display = 'none';
+      startCodexPoll();
+      return;
+    }
+
+    if (data.phase === 'error') {
+      banner.className = 'banner error';
+      banner.textContent = data.error ? `❌ ${data.error}` : `❌ ${data.message || 'Codex login failed.'}`;
+      codeBox.style.display = 'none';
+      startBtn.style.display = 'inline-flex';
+      cancelBtn.style.display = 'none';
+      logoutBtn.style.display = 'none';
+      stopCodexPoll();
+      return;
+    }
+
+    banner.className = 'banner info';
+    banner.textContent = data.message || 'Codex is not connected.';
+    codeBox.style.display = 'none';
+    startBtn.style.display = 'inline-flex';
+    cancelBtn.style.display = 'none';
+    logoutBtn.style.display = 'none';
+    stopCodexPoll();
+  }
+
+  async function loadCodexStatus() {
+    try {
+      if (!setupAuth.passwordConfigured || (setupAuth.required && !setupAuth.authenticated)) {
+        renderCodexState({ phase: 'locked', message: 'Unlock setup to manage Codex Plan login.' });
+        return;
+      }
+
+      const data = await apiJson('/setup/codex/status');
+      renderCodexState(data);
+    } catch (error) {
+      document.getElementById('codex-status').className = 'banner error';
+      document.getElementById('codex-status').textContent = `❌ ${await normalizeApiError(error)}`;
+      stopCodexPoll();
+    }
+  }
+
+  async function startCodexLogin(btn) {
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = '⏳ Starting...';
+
+    try {
+      await apiJson('/setup/codex/start', { method: 'POST' });
+      await loadCodexStatus();
+    } catch (error) {
+      alert(await normalizeApiError(error));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+
+  async function cancelCodexLogin(btn) {
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = '⏳ Cancelling...';
+
+    try {
+      await apiJson('/setup/codex/cancel', { method: 'POST' });
+      await loadCodexStatus();
+    } catch (error) {
+      alert(await normalizeApiError(error));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+
+  async function logoutCodex(btn) {
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = '⏳ Removing...';
+
+    try {
+      await apiJson('/setup/codex/logout', { method: 'POST' });
+      await loadCodexStatus();
+    } catch (error) {
+      alert(await normalizeApiError(error));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+
   // ── Reset ──────────────────────────────────────────────────────────────────
+  function stopInvitePoll() {
+    if (invitePoll) {
+      clearInterval(invitePoll);
+      invitePoll = null;
+    }
+  }
 
   async function resetSetup() {
     if (!confirm('Reset setup? This will stop Paperclip and delete config.json from the volume. Your database is NOT affected.')) return;
     try {
-      await fetch('/setup/reset', { method: 'POST' });
+      stopInvitePoll();
+      stopCodexPoll();
+      await apiJson('/setup/reset', { method: 'POST' });
       inviteUrl = null;
       appReady  = false;
       pcReady   = false;
       showTab('setup');
       await loadStatus();
+      await loadCodexStatus();
     } catch(e) {
-      alert('Reset failed. Check Railway logs.');
+      alert(await normalizeApiError(e));
     }
   }
 
   // ── Init ───────────────────────────────────────────────────────────────────
+  async function initializePage() {
+    await loadStatus();
+    await loadCodexStatus();
+  }
 
-  loadStatus();
+  initializePage();
 </script>
 </body>
 </html>
