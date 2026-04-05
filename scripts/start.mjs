@@ -948,11 +948,16 @@ function startServer() {
       }
 
       void (async () => {
-        await startCodexDeviceLogin();
-        writeJson(res, 200, {
-          ok: true,
-          state: codexClientState(req),
-        });
+        try {
+          await startCodexDeviceLogin();
+          writeJson(res, 200, {
+            ok: true,
+            state: codexClientState(req),
+          });
+        } catch (err) {
+          console.error("Codex start error:", err);
+          writeJson(res, 500, { ok: false, error: "Internal server error starting Codex login." });
+        }
       })();
       return;
     }
