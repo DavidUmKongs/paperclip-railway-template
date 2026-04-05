@@ -118,8 +118,12 @@ function clearSessionCookie() {
 function safeSecretCompare(left, right) {
   const leftBuf = Buffer.from(left, "utf8");
   const rightBuf = Buffer.from(right, "utf8");
-  if (leftBuf.length !== rightBuf.length) return false;
-  return timingSafeEqual(leftBuf, rightBuf);
+  const len = Math.max(leftBuf.length, rightBuf.length);
+  const paddedLeft = Buffer.alloc(len);
+  const paddedRight = Buffer.alloc(len);
+  leftBuf.copy(paddedLeft);
+  rightBuf.copy(paddedRight);
+  return timingSafeEqual(paddedLeft, paddedRight) && leftBuf.length === rightBuf.length;
 }
 
 function defaultCodexState(overrides = {}) {
@@ -676,12 +680,14 @@ async function startCodexDeviceLogin() {
     });
   });
 
-  setTimeout(() => {
+  const loginTimeout = setTimeout(() => {
     if (codexLoginProc === proc) {
       codexLoginStopReason = "Codex login timed out. Start the device login again.";
       proc.kill("SIGTERM");
     }
   }, CODEX_LOGIN_TIMEOUT_MS);
+
+  proc.on("exit", () => clearTimeout(loginTimeout));
 }
 
 // ── Paperclip process ─────────────────────────────────────────────────────────
