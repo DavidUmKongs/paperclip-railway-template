@@ -1093,6 +1093,10 @@ function startServer() {
   server.listen(PUBLIC_PORT, "0.0.0.0", () => {
     console.log(`\n🔧 Wrapper listening on port ${PUBLIC_PORT}`);
     console.log(`   Visit /setup to configure or manage your instance.\n`);
+
+    if (isReady()) {
+      startPaperclip();
+    }
   });
 }
 
@@ -1102,10 +1106,6 @@ async function main() {
   await initializeCodexState();
   loadInviteArtifactsFromDisk();
   startServer();
-
-  if (isReady()) {
-    startPaperclip();
-  }
 }
 
 main().catch((err) => {
