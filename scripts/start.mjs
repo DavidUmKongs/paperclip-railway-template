@@ -886,7 +886,7 @@ function startServer() {
         return;
       }
 
-      void (async () => {
+      (async () => {
         try {
           let parsed = {};
           try {
@@ -947,7 +947,7 @@ function startServer() {
         return;
       }
 
-      void (async () => {
+      (async () => {
         try {
           await startCodexDeviceLogin();
           writeJson(res, 200, {
