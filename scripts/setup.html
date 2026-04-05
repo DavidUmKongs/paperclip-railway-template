@@ -752,8 +752,19 @@
     document.getElementById('admin-exists-msg').textContent   = reason;
   }
   function copyInputValue(inputId, btn) {
-    navigator.clipboard.writeText(document.getElementById(inputId).value).then(() => {
+    const value = document.getElementById(inputId).value;
+    navigator.clipboard.writeText(value).then(() => {
       btn.textContent = '✅ Copied!';
+      setTimeout(() => btn.textContent = '📋 Copy', 2000);
+    }).catch(() => {
+      try {
+        const el = document.getElementById(inputId);
+        el.select();
+        document.execCommand('copy');
+        btn.textContent = '✅ Copied!';
+      } catch (_) {
+        btn.textContent = '❌ Copy failed';
+      }
       setTimeout(() => btn.textContent = '📋 Copy', 2000);
     });
   }

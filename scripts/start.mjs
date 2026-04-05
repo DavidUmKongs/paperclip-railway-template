@@ -108,7 +108,7 @@ function parseCookies(req) {
 }
 
 function createSessionCookie(value, maxAgeSeconds) {
-  return `${SETUP_SESSION_COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+  return `${SETUP_SESSION_COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
 }
 
 function clearSessionCookie() {
@@ -914,7 +914,7 @@ function startServer() {
         writeJson(
           res,
           200,
-          { ok: true, setupAuth: setupAuthState(req) },
+          { ok: true, setupAuth: { ...setupAuthState(req), authenticated: true } },
           { "Set-Cookie": createSessionCookie(sessionId, Math.floor(SETUP_SESSION_TTL_MS / 1000)) }
         );
       })();
@@ -1018,6 +1018,17 @@ function startServer() {
         },
       });
 
+      let responded = false;
+      const ROTATE_TIMEOUT_MS = 60_000;
+
+      const watchdog = setTimeout(() => {
+        if (!responded) {
+          responded = true;
+          proc.kill("SIGTERM");
+          writeJson(res, 504, { ok: false, error: "Rotate invite timed out." });
+        }
+      }, ROTATE_TIMEOUT_MS);
+
       let out = "";
       proc.stdout.on("data", d => {
         out += d.toString();
@@ -1026,14 +1037,17 @@ function startServer() {
         if (match) {
           inviteUrl = match[0].trim();
           writeFileSync(INVITE_FILE, inviteUrl);
-          // Clear skip reason since we now have a fresh invite
           bootstrapSkippedReason = null;
           if (existsSync(SKIP_REASON_FILE)) unlinkSync(SKIP_REASON_FILE);
         }
       });
       proc.stderr.on("data", d => process.stderr.write(d));
       proc.on("exit", () => {
-        writeJson(res, 200, { url: inviteUrl });
+        clearTimeout(watchdog);
+        if (!responded) {
+          responded = true;
+          writeJson(res, 200, { url: inviteUrl });
+        }
       });
       return;
     }
