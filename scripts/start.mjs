@@ -952,11 +952,6 @@ function startServer() {
           await startCodexDeviceLogin();
           writeJson(res, 200, {
             ok: true,
-      void (async () => {
-        try {
-          await startCodexDeviceLogin();
-          writeJson(res, 200, {
-            ok: true,
             state: codexClientState(req),
           });
         } catch (err) {
