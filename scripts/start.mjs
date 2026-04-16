@@ -68,6 +68,30 @@ const PAPERCLIP_BIN = resolvePackageBin("paperclipai");
 const CODEX_BIN = resolvePackageBin("@openai/codex", "codex");
 const GWS_BIN = resolvePackageBin("@googleworkspace/cli", "gws");
 
+// ── MIME type map ─────────────────────────────────────────────────────────────
+
+const MIME_TYPES = {
+  ".js":    "application/javascript",
+  ".mjs":   "application/javascript",
+  ".css":   "text/css",
+  ".html":  "text/html",
+  ".json":  "application/json",
+  ".svg":   "image/svg+xml",
+  ".png":   "image/png",
+  ".jpg":   "image/jpeg",
+  ".jpeg":  "image/jpeg",
+  ".gif":   "image/gif",
+  ".woff":  "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf":   "font/ttf",
+  ".ico":   "image/x-icon",
+};
+
+function getMimeType(filePath) {
+  const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
+  return MIME_TYPES[ext] || "application/octet-stream";
+}
+
 // Strip ANSI escape sequences (colors, cursor, etc.) from strings
 function stripAnsi(str) {
   return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
@@ -1470,12 +1494,25 @@ function startServer() {
       return;
     }
 
-    // ── Setup page ────────────────────────────────────────────────────────────
+    // ── Setup page + static assets ────────────────────────────────────────────
 
-    if (path === "/setup") {
-      res.writeHead(200, { "Content-Type": "text/html" });
+    if (path === "/setup" || path === "/setup/") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(readFileSync(join(__dirname, "setup.html"), "utf8"));
       return;
+    }
+
+    if (path.startsWith("/setup/")) {
+      // Serve static assets from the scripts/ directory (e.g. /setup/assets/index-Br2N7xYL.js)
+      const assetRelPath = path.slice("/setup/".length);
+      const assetPath = join(__dirname, assetRelPath);
+      // Prevent path traversal outside of the scripts directory
+      if (assetPath.startsWith(__dirname + "/") && existsSync(assetPath)) {
+        const contentType = getMimeType(assetPath);
+        res.writeHead(200, { "Content-Type": contentType });
+        res.end(readFileSync(assetPath));
+        return;
+      }
     }
 
     // ── Root + everything else ────────────────────────────────────────────────
